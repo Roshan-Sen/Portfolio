@@ -3,8 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-import torch
-
 def normalize_tensor(tensor):
     """
     Normalizes a PyTorch tensor to the range [0, 1].
