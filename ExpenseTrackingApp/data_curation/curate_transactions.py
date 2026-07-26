@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import csv
 import hashlib
 import json
 import re
@@ -24,9 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = REPO_ROOT / "Spending_Income_Tracker.xlsx"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 OUTPUT_WORKBOOK_NAME = "curated_transactions.xlsx"
+OUTPUT_CSV_NAME = "curated_transactions.csv"
 OUTPUT_REPORT_NAME = "curation_report.json"
 ALLOWED_TYPES = ("Income", "Expense", "Investment")
 OUTPUT_HEADERS = ("Date", "Type", "Amount", "Description")
+CSV_HEADERS = ("occurred_on", "transaction_type", "amount", "description")
 
 
 @dataclass(frozen=True)
@@ -404,6 +407,22 @@ def write_workbook(transactions: list[Transaction], output_path: Path) -> None:
     workbook.close()
 
 
+def write_csv(transactions: list[Transaction], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(CSV_HEADERS)
+        for transaction in transactions:
+            writer.writerow(
+                (
+                    transaction.transaction_date.isoformat(),
+                    transaction.transaction_type.lower(),
+                    format(transaction.amount, ".2f"),
+                    transaction.description,
+                )
+            )
+
+
 def counts_by_month(transactions: list[Transaction]) -> dict[str, dict[str, int]]:
     result: dict[str, Counter[str]] = defaultdict(Counter)
     for transaction in transactions:
@@ -462,8 +481,10 @@ def curate(source_path: Path = DEFAULT_SOURCE, output_dir: Path = DEFAULT_OUTPUT
         raise ValueError(f"Curated transaction validation failed: {validation['errors']}")
 
     workbook_path = output_dir / OUTPUT_WORKBOOK_NAME
+    csv_path = output_dir / OUTPUT_CSV_NAME
     report_path = output_dir / OUTPUT_REPORT_NAME
     write_workbook(transactions, workbook_path)
+    write_csv(transactions, csv_path)
 
     counts = Counter(item.transaction_type for item in transactions)
     totals = {
@@ -478,9 +499,11 @@ def curate(source_path: Path = DEFAULT_SOURCE, output_dir: Path = DEFAULT_OUTPUT
     }
     source_hash_after = sha256_file(source_path)
     report = {
-        "version": 1,
+        "version": 2,
         "source_file": source_path.name,
         "output_file": workbook_path.name,
+        "csv_output_file": csv_path.name,
+        "csv_sha256": sha256_file(csv_path),
         "source_sha256_before": source_hash_before,
         "source_sha256_after": source_hash_after,
         "source_unchanged": source_hash_before == source_hash_after,
@@ -532,8 +555,8 @@ def main() -> None:
     args = parse_args()
     report = curate(args.source, args.output_dir)
     print(
-        f"Created {report['output_file']} with {report['curated_records']} records; "
-        f"report written to {OUTPUT_REPORT_NAME}."
+        f"Created {report['output_file']} and {report['csv_output_file']} with "
+        f"{report['curated_records']} records; report written to {OUTPUT_REPORT_NAME}."
     )
 
 

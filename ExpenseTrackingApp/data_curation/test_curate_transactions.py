@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import unittest
@@ -13,12 +14,16 @@ from pathlib import Path
 import openpyxl
 
 from data_curation.curate_transactions import (
+    CSV_HEADERS,
     DEFAULT_SOURCE,
+    OUTPUT_CSV_NAME,
     OUTPUT_REPORT_NAME,
     OUTPUT_WORKBOOK_NAME,
+    Transaction,
     curate,
     normalize_date,
     sha256_file,
+    write_csv,
 )
 
 
@@ -34,6 +39,7 @@ class CurationTests(unittest.TestCase):
         cls.report = curate(DEFAULT_SOURCE, cls.output_dir)
         cls.source_hash_after = sha256_file(DEFAULT_SOURCE)
         cls.output_workbook = cls.output_dir / OUTPUT_WORKBOOK_NAME
+        cls.output_csv = cls.output_dir / OUTPUT_CSV_NAME
         cls.output_report = cls.output_dir / OUTPUT_REPORT_NAME
 
     @classmethod
@@ -181,13 +187,95 @@ class CurationTests(unittest.TestCase):
         finally:
             workbook.close()
 
+    def test_csv_structure_and_values(self) -> None:
+        with self.output_csv.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self.assertEqual(tuple(reader.fieldnames or ()), CSV_HEADERS)
+            rows = list(reader)
+
+        self.assertEqual(len(rows), 452)
+        counts = {"income": 0, "expense": 0, "investment": 0}
+        totals = {
+            "income": Decimal("0"),
+            "expense": Decimal("0"),
+            "investment": Decimal("0"),
+        }
+        for row in rows:
+            date.fromisoformat(row["occurred_on"])
+            self.assertIn(row["transaction_type"], counts)
+            amount = Decimal(row["amount"])
+            self.assertGreater(amount, 0)
+            self.assertEqual(amount.as_tuple().exponent, -2)
+            self.assertTrue(row["description"].strip())
+            counts[row["transaction_type"]] += 1
+            totals[row["transaction_type"]] += amount
+
+        self.assertEqual(
+            counts,
+            {"income": 30, "expense": 340, "investment": 82},
+        )
+        self.assertEqual(
+            {key: format(value, ".2f") for key, value in totals.items()},
+            {
+                "income": "78632.30",
+                "expense": "10696.35",
+                "investment": "66824.56",
+            },
+        )
+
+    def test_csv_matches_workbook_order(self) -> None:
+        with self.output_csv.open(encoding="utf-8", newline="") as handle:
+            csv_rows = list(csv.DictReader(handle))
+
+        workbook = openpyxl.load_workbook(self.output_workbook, data_only=True)
+        try:
+            workbook_rows = [
+                {
+                    "occurred_on": row[0].value.date().isoformat(),
+                    "transaction_type": row[1].value.lower(),
+                    "amount": format(Decimal(str(row[2].value)), ".2f"),
+                    "description": row[3].value,
+                }
+                for row in workbook["Transactions"].iter_rows(min_row=2, max_col=4)
+            ]
+        finally:
+            workbook.close()
+
+        self.assertEqual(csv_rows, workbook_rows)
+
+    def test_csv_escapes_special_descriptions(self) -> None:
+        output_path = self.output_dir / "csv_escaping_test.csv"
+        description = 'Transit, "express"\nsecond line'
+        write_csv(
+            [
+                Transaction(
+                    transaction_date=date(2026, 7, 26),
+                    transaction_type="Expense",
+                    amount=Decimal("12.50"),
+                    description=description,
+                    source_row=1,
+                    source_column=1,
+                    source_month="2026-07",
+                )
+            ],
+            output_path,
+        )
+
+        with output_path.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["description"], description)
+
     def test_outputs_are_valid_files(self) -> None:
         self.assertTrue(self.output_workbook.is_file())
+        self.assertTrue(self.output_csv.is_file())
         self.assertTrue(self.output_report.is_file())
         with zipfile.ZipFile(self.output_workbook) as archive:
             self.assertIsNone(archive.testzip())
         report_from_disk = json.loads(self.output_report.read_text(encoding="utf-8"))
         self.assertEqual(report_from_disk, self.report)
+        self.assertEqual(self.report["version"], 2)
+        self.assertEqual(self.report["csv_output_file"], OUTPUT_CSV_NAME)
+        self.assertEqual(self.report["csv_sha256"], sha256_file(self.output_csv))
         self.assertTrue(self.report["validation"]["passed"])
 
 
