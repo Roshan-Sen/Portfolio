@@ -1,0 +1,138 @@
+---
+title: "Cash-Flow Report"
+format:
+  dashboard:
+    theme: cosmo
+    scrolling: true
+    embed-resources: true
+    expandable: true
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  cache: false
+---
+
+```{python}
+#| output: false
+
+import os
+
+start_date = os.environ.get("EXPENSE_REPORT_START_DATE")
+end_date = os.environ.get("EXPENSE_REPORT_END_DATE")
+database = os.environ.get("EXPENSE_REPORT_DATABASE", "expense_tracking_app")
+period_label = os.environ.get("EXPENSE_REPORT_PERIOD_LABEL")
+```
+
+```{python}
+#| output: false
+
+from datetime import date, timedelta
+
+from reporting.cash_flow import build_cash_flow_report
+from reporting.charts import (
+    create_cash_flow_waterfall,
+    create_monthly_activity_chart,
+)
+from reporting.data import load_transactions
+from reporting.tables import (
+    initialize_transaction_tables,
+    show_transaction_table,
+)
+
+if start_date is None or end_date is None:
+    raise ValueError(
+        "start_date and end_date parameters are required; "
+        "use scripts/generate_report.py"
+    )
+
+report_start = date.fromisoformat(start_date)
+report_end = date.fromisoformat(end_date)
+transactions = load_transactions(
+    start_date=report_start,
+    end_date_exclusive=report_end + timedelta(days=1),
+    database=database,
+)
+report = build_cash_flow_report(transactions, report_start, report_end)
+display_period = period_label or f"{start_date} through {end_date}"
+```
+
+```{python}
+initialize_transaction_tables()
+```
+
+`{python} display_period` · `{python} len(report.transactions)` transactions
+
+## Summary {.flow}
+
+```{python}
+#| content: valuebox
+#| title: "Income"
+#| icon: cash-stack
+#| color: success
+
+dict(value=f"${report.summary.income:,.2f}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "Expenses"
+#| icon: cart
+#| color: danger
+
+dict(value=f"${report.summary.expenses:,.2f}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "Investments"
+#| icon: graph-up-arrow
+#| color: primary
+
+dict(value=f"${report.summary.investments:,.2f}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "Net Cash Flow"
+#| icon: wallet2
+
+dict(
+    color="success" if report.summary.net_cash_flow >= 0 else "danger",
+    value=f"${report.summary.net_cash_flow:,.2f}",
+)
+```
+
+## Charts {height=500}
+
+```{python}
+#| title: "Cash-Flow Waterfall"
+
+create_cash_flow_waterfall(report)
+```
+
+```{python}
+#| title: "Monthly Activity"
+
+create_monthly_activity_chart(report)
+```
+
+## Transactions {.tabset .flow}
+
+```{python}
+#| title: "Income"
+
+show_transaction_table(report, "income")
+```
+
+```{python}
+#| title: "Expenses"
+
+show_transaction_table(report, "expense")
+```
+
+```{python}
+#| title: "Investments"
+
+show_transaction_table(report, "investment")
+```

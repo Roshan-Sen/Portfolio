@@ -19,6 +19,12 @@ htmlcov/
 # Personal financial data and generated outputs
 Spending_Income_Tracker.xlsx
 data_curation/output/
+reports/output/
+reports/*_files/
+
+# Quarto and Jupyter report caches
+.quarto/
+.jupyter_cache/
 
 # Local planning files
 .plans/
@@ -34,3 +40,6 @@ data_curation/output/
 
 # Logs
 *.log
+
+/.quarto/
+**/*.quarto_ipynb
