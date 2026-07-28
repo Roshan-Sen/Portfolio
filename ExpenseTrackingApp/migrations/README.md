@@ -60,17 +60,24 @@ psql -X -v ON_ERROR_STOP=1 \
 psql -X -v ON_ERROR_STOP=1 \
   --dbname=expense_tracking_app \
   --file=migrations/001_create_transactions.sql
+
+psql -X -v ON_ERROR_STOP=1 \
+  --dbname=expense_tracking_app \
+  --file=migrations/002_reject_nan_amounts.sql
 ```
 
 Migration `000` must run against an existing maintenance database because
 PostgreSQL cannot create a database while connected to that same database.
-Migration `001` then connects to the new application database.
+Migration `001` then connects to the new application database. Migration `002`
+repairs any existing `NaN` amounts and strengthens the amount constraint.
 
-Both migrations are safe to run more than once. Existing objects are retained.
+All migrations are safe to run more than once. Existing objects are retained.
 PostgreSQL may print notices that an existing table or index was skipped.
-`IF NOT EXISTS` does not reconcile an incorrectly shaped existing object, so
-applied migration files should remain unchanged. Put future schema changes in
-new, sequentially numbered migration files.
+Migration `002` drops and recreates its named constraint so a rerun restores the
+intended definition without changing valid rows. `IF NOT EXISTS` does not
+reconcile an incorrectly shaped existing object, so applied migration files
+should remain unchanged. Put future schema changes in new, sequentially
+numbered migration files.
 
 ## Transaction schema
 
@@ -86,14 +93,17 @@ new, sequentially numbered migration files.
 | `created_at` | `timestamp with time zone` | Row creation time |
 | `updated_at` | `timestamp with time zone` | Most recent application update |
 
-Amounts are stored as positive values. `transaction_type` determines their
-meaning in reports. The application is responsible for changing `updated_at`
-when a transaction is edited.
+Amounts are stored as finite positive values. `transaction_type` determines
+their meaning in reports. Migration `002` replaces any existing PostgreSQL
+`NaN` amount with `$0.01` and updates that row's `updated_at` timestamp; the
+affected transaction IDs are listed in the migration output. This repair is a
+nominal substitute and does not recover the original amount. The application is
+responsible for changing `updated_at` when a transaction is edited.
 
 The schema enforces:
 
 - A valid lowercase transaction type.
-- An amount greater than zero.
+- A finite amount greater than zero; PostgreSQL `NaN` is explicitly rejected.
 - A description containing at least one non-whitespace character.
 
 Indexes support date-range queries and queries filtered by both transaction type
@@ -137,5 +147,6 @@ INSERT INTO public.transactions (
 ROLLBACK;
 ```
 
-Invalid transaction types, amounts less than or equal to zero, and blank
-descriptions should be rejected by PostgreSQL.
+Invalid transaction types, `NaN`, amounts less than or equal to zero, amounts
+outside `numeric(12,2)`, and blank descriptions should be rejected by
+PostgreSQL.

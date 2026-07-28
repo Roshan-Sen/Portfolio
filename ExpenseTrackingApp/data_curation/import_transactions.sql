@@ -45,7 +45,7 @@ CREATE TEMPORARY TABLE historical_transactions_import (
     CONSTRAINT historical_transactions_import_type_check
         CHECK (transaction_type IN ('income', 'expense', 'investment')),
     CONSTRAINT historical_transactions_import_amount_check
-        CHECK (amount > 0),
+        CHECK (amount > 0 AND amount <> 'NaN'::numeric),
     CONSTRAINT historical_transactions_import_description_check
         CHECK (btrim(description) <> '')
 ) ON COMMIT DROP;

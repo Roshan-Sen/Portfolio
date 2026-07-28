@@ -14,5 +14,8 @@ db-migrate:
 	$(PSQL) -X -v ON_ERROR_STOP=1 \
 		--dbname="$(DATABASE_NAME)" \
 		--file=migrations/001_create_transactions.sql
+	$(PSQL) -X -v ON_ERROR_STOP=1 \
+		--dbname="$(DATABASE_NAME)" \
+		--file=migrations/002_reject_nan_amounts.sql
 
 db-setup: db-create db-migrate
