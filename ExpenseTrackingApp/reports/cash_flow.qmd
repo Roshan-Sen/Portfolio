@@ -32,7 +32,7 @@ from datetime import date, timedelta
 from reporting.cash_flow import build_cash_flow_report
 from reporting.charts import (
     create_cash_flow_waterfall,
-    create_monthly_activity_chart,
+    create_monthly_net_cash_flow_chart,
 )
 from reporting.data import load_transactions
 from reporting.tables import (
@@ -55,10 +55,6 @@ transactions = load_transactions(
 )
 report = build_cash_flow_report(transactions, report_start, report_end)
 display_period = period_label or f"{start_date} through {end_date}"
-```
-
-```{python}
-initialize_transaction_tables()
 ```
 
 `{python} display_period` · `{python} len(report.transactions)` transactions
@@ -112,9 +108,9 @@ create_cash_flow_waterfall(report)
 ```
 
 ```{python}
-#| title: "Monthly Activity"
+#| title: "Monthly Net Cash Flow"
 
-create_monthly_activity_chart(report)
+create_monthly_net_cash_flow_chart(report)
 ```
 
 ## Transactions {.tabset .flow}
@@ -122,6 +118,7 @@ create_monthly_activity_chart(report)
 ```{python}
 #| title: "Income"
 
+initialize_transaction_tables()
 show_transaction_table(report, "income")
 ```
 

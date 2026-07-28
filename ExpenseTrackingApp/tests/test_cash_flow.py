@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from reporting.cash_flow import (
@@ -13,17 +14,19 @@ from reporting.cash_flow import (
     build_cash_flow_report,
 )
 from reporting.charts import (
-    EXPENSE_COLOR,
-    INCOME_COLOR,
-    INVESTMENT_COLOR,
+    NEGATIVE_NET_COLOR,
+    NEUTRAL_NET_COLOR,
+    POSITIVE_NET_COLOR,
     create_cash_flow_waterfall,
-    create_monthly_activity_chart,
+    create_monthly_net_cash_flow_chart,
 )
 from reporting.tables import (
     initialize_transaction_tables,
     show_transaction_table,
     transactions_frame,
 )
+
+REPORT_SOURCE = Path(__file__).resolve().parent.parent / "reports" / "cash_flow.qmd"
 
 
 def transaction(
@@ -135,17 +138,43 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(list(trace.y), [1000.0, -250.0, -300.0, 0])
         self.assertEqual(list(trace.measure), ["relative", "relative", "relative", "total"])
 
-    def test_monthly_chart_contains_three_bars_and_net_line(self) -> None:
-        figure = create_monthly_activity_chart(self.report)
-
-        self.assertEqual(
-            [trace.name for trace in figure.data],
-            ["Income", "Expenses", "Investments", "Net Cash Flow"],
+    def test_monthly_chart_has_one_color_coded_net_bar_trace(self) -> None:
+        report = build_cash_flow_report(
+            self.report.transactions,
+            date(2026, 1, 1),
+            date(2026, 3, 31),
         )
-        self.assertEqual(figure.data[0].marker.color, INCOME_COLOR)
-        self.assertEqual(figure.data[1].marker.color, EXPENSE_COLOR)
-        self.assertEqual(figure.data[2].marker.color, INVESTMENT_COLOR)
-        self.assertEqual(list(figure.data[3].y), [750.0, -300.0])
+        figure = create_monthly_net_cash_flow_chart(report)
+
+        self.assertEqual(len(figure.data), 1)
+        trace = figure.data[0]
+        self.assertEqual(trace.type, "bar")
+        self.assertEqual(trace.name, "Net Cash Flow")
+        self.assertEqual(list(trace.x), ["Jan", "Feb", "Mar"])
+        self.assertEqual(list(trace.y), [750.0, -300.0, 0.0])
+        self.assertEqual(
+            list(trace.marker.color),
+            [POSITIVE_NET_COLOR, NEGATIVE_NET_COLOR, NEUTRAL_NET_COLOR],
+        )
+        self.assertEqual(
+            trace.hovertemplate,
+            "%{x}<br>Net cash flow: %{y:$,.2f}<extra></extra>",
+        )
+        self.assertFalse(figure.layout.showlegend)
+        self.assertEqual(figure.layout.yaxis.tickprefix, "$")
+        self.assertTrue(figure.layout.yaxis.zeroline)
+        self.assertNotIn("yaxis2", figure.layout)
+
+    def test_monthly_chart_qualifies_labels_for_multiple_years(self) -> None:
+        report = build_cash_flow_report(
+            [],
+            date(2025, 12, 1),
+            date(2026, 2, 28),
+        )
+
+        figure = create_monthly_net_cash_flow_chart(report)
+
+        self.assertEqual(list(figure.data[0].x), ["Dec '25", "Jan '26", "Feb '26"])
 
 
 class TableTests(unittest.TestCase):
@@ -209,6 +238,17 @@ class TableTests(unittest.TestCase):
             "No income transactions occurred in this period."
         )
         show_mock.assert_not_called()
+
+
+class ReportSourceTests(unittest.TestCase):
+    def test_table_assets_are_initialized_once_before_first_table(self) -> None:
+        source = REPORT_SOURCE.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count("initialize_transaction_tables()"), 1)
+        self.assertLess(
+            source.index("initialize_transaction_tables()"),
+            source.index('show_transaction_table(report, "income")'),
+        )
 
 
 if __name__ == "__main__":

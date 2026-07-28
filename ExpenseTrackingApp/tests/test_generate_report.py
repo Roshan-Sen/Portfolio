@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
@@ -150,6 +151,40 @@ class RenderingTests(unittest.TestCase):
             self.assertEqual(
                 run_mock.call_args.kwargs["env"]["EXPENSE_REPORT_DATABASE"],
                 "expense_tracking_app",
+            )
+
+    @patch("scripts.generate_report.subprocess.run")
+    @patch("scripts.generate_report.uuid.uuid4")
+    def test_failed_render_preserves_existing_output(
+        self,
+        uuid_mock,
+        run_mock,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "report.html"
+            output.write_text("old", encoding="utf-8")
+            uuid_mock.return_value.hex = "failed-test"
+            run_mock.side_effect = subprocess.CalledProcessError(
+                returncode=1,
+                cmd=["quarto", "render"],
+            )
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                generate_report(
+                    period=self.period,
+                    database="expense_tracking_app",
+                    output_path=output,
+                    quarto="/usr/local/bin/quarto",
+                )
+
+            self.assertEqual(output.read_text(encoding="utf-8"), "old")
+            self.assertFalse(
+                (
+                    REPO_ROOT
+                    / "reports"
+                    / "output"
+                    / "cash-flow-render-failed-test.html"
+                ).exists()
             )
 
     @patch("scripts.generate_report.generate_report")
