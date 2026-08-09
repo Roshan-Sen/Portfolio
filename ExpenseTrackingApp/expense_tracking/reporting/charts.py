@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from plotly import graph_objects as go
 
-from reporting.cash_flow import CashFlowReport
+from expense_tracking.reporting.cash_flow import CashFlowReport
 
 
 INCOME_COLOR = "#198754"

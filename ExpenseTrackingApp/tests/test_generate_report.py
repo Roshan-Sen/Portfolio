@@ -12,12 +12,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts.generate_report import (
-    REPO_ROOT,
+from expense_tracking.config import PROJECT_ROOT
+from expense_tracking.errors import ReportGenerationError, ValidationError
+from expense_tracking.reports import (
     ReportPeriod,
     build_quarto_command,
     build_render_environment,
     generate_report,
+)
+from scripts.generate_report import (
     main,
     parse_args,
     report_period_from_args,
@@ -77,6 +80,17 @@ class PeriodArgumentTests(unittest.TestCase):
                         parse_args(argv)
                 self.assertEqual(raised.exception.code, 2)
 
+    def test_period_model_validates_without_argparse(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "end date"):
+            ReportPeriod.for_range(
+                date(2026, 2, 1),
+                date(2026, 1, 31),
+            )
+        with self.assertRaisesRegex(ValidationError, "calendar month"):
+            ReportPeriod.for_month(2026, 13)
+        with self.assertRaisesRegex(ValidationError, "date values"):
+            ReportPeriod.for_range("2026-01-01", date(2026, 1, 31))
+
 
 class RenderingTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -96,7 +110,7 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(command[:3], [
             "/usr/local/bin/quarto",
             "render",
-            str(REPO_ROOT / "reports" / "cash_flow.qmd"),
+            str(PROJECT_ROOT / "reports" / "cash_flow.qmd"),
         ])
         self.assertNotIn("-P", command)
         self.assertEqual(
@@ -115,10 +129,10 @@ class RenderingTests(unittest.TestCase):
             "expense_tracking_app",
         )
         self.assertEqual(environment["EXPENSE_REPORT_PERIOD_LABEL"], "July 2026")
-        self.assertIn(str(REPO_ROOT), environment["PYTHONPATH"])
+        self.assertIn(str(PROJECT_ROOT), environment["PYTHONPATH"])
 
-    @patch("scripts.generate_report.subprocess.run")
-    @patch("scripts.generate_report.uuid.uuid4")
+    @patch("expense_tracking.reports.subprocess.run")
+    @patch("expense_tracking.reports.uuid.uuid4")
     def test_successful_render_replaces_output_after_quarto_finishes(
         self,
         uuid_mock,
@@ -132,13 +146,13 @@ class RenderingTests(unittest.TestCase):
             def create_rendered(command, **kwargs):
                 filename = command[command.index("--output") + 1]
                 generated = (
-                    REPO_ROOT / "reports" / "output" / filename
+                    PROJECT_ROOT / "reports" / "output" / filename
                 )
                 generated.parent.mkdir(parents=True, exist_ok=True)
                 generated.write_text("new", encoding="utf-8")
 
             run_mock.side_effect = create_rendered
-            generate_report(
+            result = generate_report(
                 period=self.period,
                 database="expense_tracking_app",
                 output_path=output,
@@ -146,6 +160,7 @@ class RenderingTests(unittest.TestCase):
             )
 
             self.assertEqual(output.read_text(encoding="utf-8"), "new")
+            self.assertEqual(result, output.resolve())
             run_mock.assert_called_once()
             self.assertTrue(run_mock.call_args.kwargs["check"])
             self.assertEqual(
@@ -153,8 +168,8 @@ class RenderingTests(unittest.TestCase):
                 "expense_tracking_app",
             )
 
-    @patch("scripts.generate_report.subprocess.run")
-    @patch("scripts.generate_report.uuid.uuid4")
+    @patch("expense_tracking.reports.subprocess.run")
+    @patch("expense_tracking.reports.uuid.uuid4")
     def test_failed_render_preserves_existing_output(
         self,
         uuid_mock,
@@ -169,7 +184,10 @@ class RenderingTests(unittest.TestCase):
                 cmd=["quarto", "render"],
             )
 
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaisesRegex(
+                ReportGenerationError,
+                "Quarto exited with status 1",
+            ):
                 generate_report(
                     period=self.period,
                     database="expense_tracking_app",
@@ -180,7 +198,7 @@ class RenderingTests(unittest.TestCase):
             self.assertEqual(output.read_text(encoding="utf-8"), "old")
             self.assertFalse(
                 (
-                    REPO_ROOT
+                    PROJECT_ROOT
                     / "reports"
                     / "output"
                     / "cash-flow-render-failed-test.html"
@@ -188,10 +206,10 @@ class RenderingTests(unittest.TestCase):
             )
 
     @patch("scripts.generate_report.generate_report")
-    @patch("scripts.generate_report.shutil.which", return_value="/usr/local/bin/quarto")
-    def test_main_prints_created_path(self, which_mock, generate_mock) -> None:
+    def test_main_prints_created_path(self, generate_mock) -> None:
         with TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "report.html"
+            generate_mock.return_value = output.resolve()
             stdout = io.StringIO()
             with redirect_stdout(stdout):
                 exit_code = main(
@@ -201,16 +219,29 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("Created cash-flow report:", stdout.getvalue())
         generate_mock.assert_called_once()
-        which_mock.assert_called_once_with("quarto")
 
-    @patch("scripts.generate_report.shutil.which", return_value=None)
-    def test_missing_quarto_is_concise(self, which_mock) -> None:
+    @patch(
+        "scripts.generate_report.generate_report",
+        side_effect=ReportGenerationError(
+            "Quarto is not installed or is not available on PATH."
+        ),
+    )
+    def test_missing_quarto_is_concise(self, generate_mock) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             exit_code = main(["--year", "2026"])
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Quarto is not installed", stderr.getvalue())
+        generate_mock.assert_called_once()
+
+    @patch("expense_tracking.reports.shutil.which", return_value=None)
+    def test_service_reports_missing_quarto(self, which_mock) -> None:
+        with self.assertRaisesRegex(ReportGenerationError, "not installed"):
+            generate_report(
+                period=self.period,
+                database="expense_tracking_app",
+            )
         which_mock.assert_called_once_with("quarto")
 
 

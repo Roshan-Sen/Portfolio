@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-from reporting.data import (
+from expense_tracking.reporting.data import (
     REPORT_QUERY_PATH,
     load_report_query,
     load_transactions,
@@ -51,7 +51,7 @@ class ReportDataTests(unittest.TestCase):
         self.assertEqual(converted.id, 10)
         self.assertEqual(converted.amount, Decimal("18.75"))
 
-    @patch("reporting.data.psycopg.connect")
+    @patch("expense_tracking.reporting.data.psycopg.connect")
     def test_load_uses_read_only_connection_and_named_dates(
         self,
         connect_mock: MagicMock,

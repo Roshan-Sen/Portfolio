@@ -3,40 +3,31 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import psycopg
-from psycopg.rows import dict_row
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-INSERT_QUERY_PATH = REPO_ROOT / "queries" / "insert_transaction.sql"
-DEFAULT_DATABASE = "expense_tracking_app"
-ALLOWED_TYPES = ("expense", "income", "investment")
-CENT = Decimal("0.01")
-MAX_AMOUNT = Decimal("9999999999.99")
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from expense_tracking.config import DEFAULT_DATABASE, resolve_database
+from expense_tracking.errors import DatabaseError, QueryLoadError, TransactionError, ValidationError
+from expense_tracking.transactions import (
+    ALLOWED_TRANSACTION_TYPES,
+    MAX_AMOUNT,
+    InsertedTransaction,
+    Transaction,
+    add_transaction,
+    validate_amount,
+    validate_description,
+)
 
 
-@dataclass(frozen=True)
-class Transaction:
-    occurred_on: date
-    transaction_type: str
-    amount: Decimal
-    description: str
-
-    def query_parameters(self) -> dict[str, Any]:
-        return {
-            "occurred_on": self.occurred_on,
-            "transaction_type": self.transaction_type,
-            "amount": self.amount,
-            "description": self.description,
-        }
+ALLOWED_TYPES = ALLOWED_TRANSACTION_TYPES
 
 
 def parse_amount(value: str) -> Decimal:
@@ -44,20 +35,10 @@ def parse_amount(value: str) -> Decimal:
         amount = Decimal(value)
     except InvalidOperation as error:
         raise argparse.ArgumentTypeError("amount must be a valid decimal number") from error
-
-    if not amount.is_finite():
-        raise argparse.ArgumentTypeError("amount must be a finite decimal number")
-    if amount <= 0:
-        raise argparse.ArgumentTypeError("amount must be greater than zero")
-    if amount > MAX_AMOUNT:
-        raise argparse.ArgumentTypeError(
-            f"amount must not exceed {format(MAX_AMOUNT, '.2f')}"
-        )
-
-    normalized = amount.quantize(CENT)
-    if normalized != amount:
-        raise argparse.ArgumentTypeError("amount must have at most two decimal places")
-    return normalized
+    try:
+        return validate_amount(amount)
+    except ValidationError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def parse_date(value: str) -> date:
@@ -68,17 +49,17 @@ def parse_date(value: str) -> date:
 
 
 def parse_description(value: str) -> str:
-    description = value.strip()
-    if not description:
-        raise argparse.ArgumentTypeError("description must not be blank")
-    return description
+    try:
+        return validate_description(value)
+    except ValidationError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def parse_database(value: str) -> str:
-    database = value.strip()
-    if not database:
-        raise argparse.ArgumentTypeError("database must not be blank")
-    return database
+    try:
+        return resolve_database(value)
+    except ValidationError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def parse_args(
@@ -87,7 +68,7 @@ def parse_args(
     today: date | None = None,
 ) -> argparse.Namespace:
     default_date = today or date.today()
-    default_database = os.environ.get("PGDATABASE") or DEFAULT_DATABASE
+    default_database = resolve_database()
     parser = argparse.ArgumentParser(
         description="Add one transaction to the expense tracking database.",
         epilog=(
@@ -139,29 +120,17 @@ def parse_args(
     return parser.parse_args(argv)
 
 
-def load_insert_query(path: Path = INSERT_QUERY_PATH) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def insert_transaction(
-    transaction: Transaction,
-    database: str,
-    query: str,
-) -> Mapping[str, Any]:
-    with psycopg.connect(dbname=database, row_factory=dict_row) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, transaction.query_parameters())
-            inserted = cursor.fetchone()
-
-    if inserted is None:
-        raise RuntimeError("the database did not return the inserted transaction")
-    return inserted
-
-
-def format_transaction(transaction: Mapping[str, Any]) -> str:
+def format_transaction(
+    transaction: Mapping[str, Any] | InsertedTransaction,
+) -> str:
+    values = (
+        transaction.as_mapping()
+        if isinstance(transaction, InsertedTransaction)
+        else transaction
+    )
     return (
-        f"{transaction['occurred_on']} | {transaction['transaction_type']} | "
-        f"${Decimal(transaction['amount']):.2f} | {transaction['description']}"
+        f"{values['occurred_on']} | {values['transaction_type']} | "
+        f"${Decimal(values['amount']):.2f} | {values['description']}"
     )
 
 
@@ -183,20 +152,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     try:
-        query = load_insert_query()
-        inserted = insert_transaction(transaction, args.database, query)
-    except OSError as error:
+        inserted = add_transaction(transaction, args.database)
+    except QueryLoadError as error:
         print(f"Unable to load insert query: {error}", file=sys.stderr)
         return 1
-    except psycopg.Error as error:
-        message = str(error).splitlines()[0] if str(error) else error.__class__.__name__
-        print(f"Database error: {message}", file=sys.stderr)
+    except DatabaseError as error:
+        print(f"Database error: {error}", file=sys.stderr)
         return 1
-    except RuntimeError as error:
+    except TransactionError as error:
         print(f"Insert error: {error}", file=sys.stderr)
         return 1
 
-    print(f"Added transaction #{inserted['id']}")
+    print(f"Added transaction #{inserted.id}")
     print(format_transaction(inserted))
     return 0
 

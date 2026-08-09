@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
@@ -15,12 +17,21 @@ from unittest.mock import MagicMock, patch
 
 import psycopg
 
-from scripts.add_transaction import (
-    INSERT_QUERY_PATH,
+from expense_tracking.config import INSERT_QUERY_PATH
+from expense_tracking.errors import (
+    DatabaseError,
+    QueryLoadError,
+    TransactionError,
+    ValidationError,
+)
+from expense_tracking.transactions import (
     MAX_AMOUNT,
+    InsertedTransaction,
     Transaction,
-    insert_transaction,
+    add_transaction,
     load_insert_query,
+)
+from scripts.add_transaction import (
     main,
     parse_amount,
     parse_args,
@@ -120,6 +131,37 @@ class ValidationTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, 2)
 
+    def test_transaction_model_validates_without_argparse(self) -> None:
+        transaction = Transaction(
+            occurred_on=date(2026, 7, 27),
+            transaction_type="expense",
+            amount=Decimal("18.50"),
+            description="  Lunch  ",
+        )
+        self.assertEqual(transaction.description, "Lunch")
+
+        with self.assertRaisesRegex(ValidationError, "transaction type"):
+            Transaction(
+                occurred_on=date(2026, 7, 27),
+                transaction_type="transfer",
+                amount=Decimal("18.50"),
+                description="Test",
+            )
+        with self.assertRaisesRegex(ValidationError, "greater than zero"):
+            Transaction(
+                occurred_on=date(2026, 7, 27),
+                transaction_type="expense",
+                amount=Decimal("0.00"),
+                description="Test",
+            )
+        with self.assertRaisesRegex(ValidationError, "description"):
+            Transaction(
+                occurred_on=date(2026, 7, 27),
+                transaction_type="expense",
+                amount=Decimal("1.00"),
+                description="  ",
+            )
+
 
 class QueryTests(unittest.TestCase):
     def test_query_is_loaded_from_the_central_queries_directory(self) -> None:
@@ -143,10 +185,10 @@ class QueryTests(unittest.TestCase):
     def test_missing_query_file_raises_os_error(self) -> None:
         with TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "missing.sql"
-            with self.assertRaises(OSError):
+            with self.assertRaises(QueryLoadError):
                 load_insert_query(missing)
 
-    @patch("scripts.add_transaction.psycopg.connect")
+    @patch("expense_tracking.transactions.psycopg.connect")
     def test_insert_uses_named_parameters_and_returns_row(
         self,
         connect_mock: MagicMock,
@@ -166,13 +208,13 @@ class QueryTests(unittest.TestCase):
         cursor = connection.cursor.return_value.__enter__.return_value
         cursor.fetchone.return_value = inserted
 
-        result = insert_transaction(
+        result = add_transaction(
             transaction,
             "expense_tracking_app",
-            "INSERT QUERY",
+            query="INSERT QUERY",
         )
 
-        self.assertEqual(result, inserted)
+        self.assertEqual(result, InsertedTransaction.from_row(inserted))
         connect_mock.assert_called_once()
         self.assertEqual(
             connect_mock.call_args.kwargs["dbname"],
@@ -183,7 +225,7 @@ class QueryTests(unittest.TestCase):
             transaction.query_parameters(),
         )
 
-    @patch("scripts.add_transaction.psycopg.connect")
+    @patch("expense_tracking.transactions.psycopg.connect")
     def test_insert_requires_returned_row(self, connect_mock: MagicMock) -> None:
         transaction = Transaction(
             occurred_on=date(2026, 7, 27),
@@ -195,12 +237,67 @@ class QueryTests(unittest.TestCase):
         cursor = connection.cursor.return_value.__enter__.return_value
         cursor.fetchone.return_value = None
 
-        with self.assertRaisesRegex(RuntimeError, "did not return"):
-            insert_transaction(transaction, "expense_tracking_app", "INSERT QUERY")
+        with self.assertRaisesRegex(TransactionError, "did not return"):
+            add_transaction(
+                transaction,
+                "expense_tracking_app",
+                query="INSERT QUERY",
+            )
+
+    @patch(
+        "expense_tracking.transactions.psycopg.connect",
+        side_effect=psycopg.OperationalError("connection failed\nDETAIL: hidden"),
+    )
+    def test_database_errors_are_wrapped_concisely(
+        self,
+        connect_mock: MagicMock,
+    ) -> None:
+        transaction = Transaction(
+            occurred_on=date(2026, 7, 27),
+            transaction_type="expense",
+            amount=Decimal("18.75"),
+            description="Lunch",
+        )
+
+        with self.assertRaisesRegex(DatabaseError, "^connection failed$"):
+            add_transaction(
+                transaction,
+                "expense_tracking_app",
+                query="INSERT QUERY",
+            )
+        connect_mock.assert_called_once()
 
 
 class CommandTests(unittest.TestCase):
-    @patch("scripts.add_transaction.psycopg.connect")
+    def test_direct_script_invocation_remains_supported(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    Path(__file__).resolve().parent.parent
+                    / "scripts"
+                    / "add_transaction.py"
+                ),
+                "--amount",
+                "18.75",
+                "--description",
+                "Lunch",
+                "--date",
+                "2026-07-27",
+                "--dry-run",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            "Dry run: 2026-07-27 | expense | $18.75 | Lunch\n",
+        )
+
+    @patch("scripts.add_transaction.add_transaction")
     def test_dry_run_prints_without_connecting(
         self,
         connect_mock: MagicMock,
@@ -226,21 +323,19 @@ class CommandTests(unittest.TestCase):
         )
         connect_mock.assert_not_called()
 
-    @patch("scripts.add_transaction.insert_transaction")
-    @patch("scripts.add_transaction.load_insert_query", return_value="INSERT QUERY")
+    @patch("scripts.add_transaction.add_transaction")
     def test_success_prints_inserted_transaction(
         self,
-        load_query_mock: MagicMock,
         insert_mock: MagicMock,
     ) -> None:
-        insert_mock.return_value = {
-            "id": 453,
-            "occurred_on": date(2026, 7, 27),
-            "transaction_type": "expense",
-            "amount": Decimal("18.75"),
-            "description": "Lunch",
-            "created_at": datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
-        }
+        insert_mock.return_value = InsertedTransaction(
+            id=453,
+            occurred_on=date(2026, 7, 27),
+            transaction_type="expense",
+            amount=Decimal("18.75"),
+            description="Lunch",
+            created_at=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+        )
         output = io.StringIO()
 
         with redirect_stdout(output):
@@ -261,17 +356,39 @@ class CommandTests(unittest.TestCase):
             "Added transaction #453\n"
             "2026-07-27 | expense | $18.75 | Lunch\n",
         )
-        load_query_mock.assert_called_once_with()
         insert_mock.assert_called_once()
 
     @patch(
-        "scripts.add_transaction.insert_transaction",
-        side_effect=psycopg.OperationalError("connection failed"),
+        "scripts.add_transaction.add_transaction",
+        side_effect=QueryLoadError("missing query"),
     )
-    @patch("scripts.add_transaction.load_insert_query", return_value="INSERT QUERY")
+    def test_query_error_preserves_cli_message(self, insert_mock: MagicMock) -> None:
+        errors = io.StringIO()
+        with redirect_stderr(errors):
+            exit_code = main(
+                [
+                    "--amount",
+                    "18.75",
+                    "--description",
+                    "Lunch",
+                    "--date",
+                    "2026-07-27",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(
+            errors.getvalue(),
+            "Unable to load insert query: missing query\n",
+        )
+        insert_mock.assert_called_once()
+
+    @patch(
+        "scripts.add_transaction.add_transaction",
+        side_effect=DatabaseError("connection failed"),
+    )
     def test_database_error_is_concise(
         self,
-        load_query_mock: MagicMock,
         insert_mock: MagicMock,
     ) -> None:
         errors = io.StringIO()
@@ -290,7 +407,6 @@ class CommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertEqual(errors.getvalue(), "Database error: connection failed\n")
-        load_query_mock.assert_called_once_with()
         insert_mock.assert_called_once()
 
 

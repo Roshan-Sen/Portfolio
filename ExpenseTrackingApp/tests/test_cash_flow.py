@@ -8,19 +8,19 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-from reporting.cash_flow import (
+from expense_tracking.reporting.cash_flow import (
     CashFlowReport,
     ReportTransaction,
     build_cash_flow_report,
 )
-from reporting.charts import (
+from expense_tracking.reporting.charts import (
     NEGATIVE_NET_COLOR,
     NEUTRAL_NET_COLOR,
     POSITIVE_NET_COLOR,
     create_cash_flow_waterfall,
     create_monthly_net_cash_flow_chart,
 )
-from reporting.tables import (
+from expense_tracking.reporting.tables import (
     initialize_transaction_tables,
     show_transaction_table,
     transactions_frame,
@@ -205,7 +205,7 @@ class TableTests(unittest.TestCase):
             }
         ])
 
-    @patch("reporting.tables.init_notebook_mode")
+    @patch("expense_tracking.reporting.tables.init_notebook_mode")
     def test_table_assets_are_initialized_for_offline_reports(
         self,
         init_notebook_mode_mock,
@@ -217,7 +217,7 @@ class TableTests(unittest.TestCase):
             connected=False,
         )
 
-    @patch("reporting.tables.show")
+    @patch("expense_tracking.reporting.tables.show")
     def test_interactive_table_configuration(self, show_mock) -> None:
         show_transaction_table(self.report, "expense")
 
@@ -229,7 +229,7 @@ class TableTests(unittest.TestCase):
         self.assertEqual(kwargs["maxBytes"], 0)
         self.assertEqual(kwargs["column_filters"], "header")
 
-    @patch("reporting.tables.show")
+    @patch("expense_tracking.reporting.tables.show")
     @patch("builtins.print")
     def test_empty_table_prints_message(self, print_mock, show_mock) -> None:
         show_transaction_table(self.report, "income")

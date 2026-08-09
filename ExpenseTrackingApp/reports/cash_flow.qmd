@@ -29,13 +29,13 @@ period_label = os.environ.get("EXPENSE_REPORT_PERIOD_LABEL")
 
 from datetime import date, timedelta
 
-from reporting.cash_flow import build_cash_flow_report
-from reporting.charts import (
+from expense_tracking.reporting.cash_flow import build_cash_flow_report
+from expense_tracking.reporting.charts import (
     create_cash_flow_waterfall,
     create_monthly_net_cash_flow_chart,
 )
-from reporting.data import load_transactions
-from reporting.tables import (
+from expense_tracking.reporting.data import load_transactions
+from expense_tracking.reporting.tables import (
     initialize_transaction_tables,
     show_transaction_table,
 )

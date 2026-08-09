@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from itables import JavascriptFunction, init_notebook_mode, show
 
-from reporting.cash_flow import CashFlowReport
+from expense_tracking.reporting.cash_flow import CashFlowReport
 
 
 CURRENCY_RENDERER = JavascriptFunction(

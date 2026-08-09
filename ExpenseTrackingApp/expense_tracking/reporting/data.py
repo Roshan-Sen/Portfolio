@@ -10,11 +10,8 @@ from typing import Any, Mapping
 import psycopg
 from psycopg.rows import dict_row
 
-from reporting.cash_flow import ReportTransaction
-
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-REPORT_QUERY_PATH = REPO_ROOT / "queries" / "select_report_transactions.sql"
+from expense_tracking.config import REPORT_QUERY_PATH
+from expense_tracking.reporting.cash_flow import ReportTransaction
 
 
 def load_report_query(path: Path = REPORT_QUERY_PATH) -> str:
