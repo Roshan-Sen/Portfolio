@@ -1,8 +1,13 @@
 PSQL ?= psql
+PYTHON ?= analysis_env/bin/python
 DATABASE_NAME ?= expense_tracking_app
 MAINTENANCE_DB ?= postgres
 
-.PHONY: db-create db-migrate db-setup
+.PHONY: app db-create db-migrate db-setup
+
+app:
+	$(PYTHON) -m streamlit run streamlit_app.py \
+		--browser.gatherUsageStats false
 
 db-create:
 	$(PSQL) -X -v ON_ERROR_STOP=1 \
