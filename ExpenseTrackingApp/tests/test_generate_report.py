@@ -113,6 +113,7 @@ class RenderingTests(unittest.TestCase):
             str(PROJECT_ROOT / "reports" / "cash_flow.qmd"),
         ])
         self.assertNotIn("-P", command)
+        self.assertIn("--execute-daemon-restart", command)
         self.assertEqual(
             command[command.index("--output-dir") + 1],
             "output",

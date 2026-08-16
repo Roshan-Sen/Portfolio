@@ -93,6 +93,7 @@ def build_quarto_command(*, output_filename: str, quarto: str) -> list[str]:
         "render",
         str(REPORT_SOURCE),
         "--execute",
+        "--execute-daemon-restart",
         "--no-cache",
         "--output",
         output_filename,
